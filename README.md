@@ -1,10 +1,10 @@
-# Write-Audit-Publish (WAP) Pattern implemented in Pyspark (AWS Glue ETL)
+# Write-Audit-Publish (WAP) Pattern implemented in Iceberg using Pyspark (AWS Glue ETL)
 
 This repository shows how to implement the Write-Audit-Publish (WAP) pattern using:
-- Apache Spark
+- Apache Spark (Pyspark)
 - Apache Iceberg
 
-It's aimed at Data Engineers who want to get started quickly
+It's aimed at Data Engineers who want to get started quickly.
 
 > [!WARNING]
 > This repository is for demonstratin purposes only:
@@ -84,6 +84,13 @@ If your word of caution doesn't suffice, make it an explicit, written agreement 
 You shouldn't be the one to blame in case they specically requested this risky practice you advised them not to do.
 
 Keep it simple though. A simple email you send them and they reply by acknowleding the risks could be enough for that. 
+
+# Appendix C: Alternative Implementations
+
+WAP can be implemented in other ways as well. You could for example:
+- Use a __staging table__ for the write phase, audit it, then merge it into the target table (or swap partitions)
+- Use a __status column__ on the result dataframe, indicating which rows passed the checks and only write/merge these into the target table
+- Swap out either Iceberg or Pyspark for another storage solution (Delta Lake, Snowflake, Postgres...) or processing engine (DuckDB, Polars...)
 
 # References used
 
