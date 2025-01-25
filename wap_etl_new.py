@@ -4,6 +4,9 @@ from pyspark.sql import SparkSession, DataFrame
 import uuid
 from datetime import datetime
 
+import boto3
+import awswrangler as wr
+
 
 def create_iceberg_glue_session(
     warehouse_bucket: str, catalog_name: str
@@ -73,6 +76,54 @@ def setup_glue_iceberg_table(
     # When not explicitly creating a branch, Iceberg will create a default one which is
     # also called 'main' when you insert data for the first time.
     spark.sql(f"ALTER TABLE {full_table_name} CREATE BRANCH IF NOT EXISTS main")
+
+
+def create_bucket(s3_client: "boto3.client.S3", bucket_name: str, region: str):
+    try:
+        # default region, specifying it results in an error
+        if region == "us-east-1":
+            s3_client.create_bucket(Bucket=bucket_name)
+        else:
+            s3_client.create_bucket(
+                Bucket=bucket_name,
+                CreateBucketConfiguration={"LocationConstraint": region},
+            )
+    except s3_client.exceptions.BucketAlreadyOwnedByYou:
+        print(f"Bucket {bucket_name} already exists and is owned by you.")
+        pass
+
+
+def create_database(database_name: str, athena_workgroup: str = "primary") -> dict:
+    return wr.athena.start_query_execution(
+        sql=f"CREATE DATABASE IF NOT EXISTS {database_name}",
+        wait=True,
+        workgroup=athena_workgroup,
+    )
+
+
+def create_iceberg_table(
+    catalog_name: str,
+    database_name: str,
+    table_name: str,
+    s3_bucket_name: str,
+    athena_workgroup: str = "primary",
+) -> dict:
+    return wr.athena.start_query_execution(
+        sql=f"""
+        CREATE TABLE IF NOT EXISTS {database_name}.{table_name} (
+            id INT,
+            name STRING,
+            age INT
+        )
+        LOCATION 's3://{s3_bucket_name}/{catalog_name}/{database_name}/{table_name}/'
+        TBLPROPERTIES (
+          'table_type'='ICEBERG',
+          'format'='parquet',
+          'write_compression'='snappy'
+        )""",
+        wait=True,
+        workgroup=athena_workgroup,
+    )
 
 
 def read_data(spark: SparkSession) -> DataFrame:
@@ -181,36 +232,45 @@ def wap_append(
     finally:
         # Cleanup
         # Unset from table properties so that creating the table DDL statement in Athena will work again
-        spark.sql(f"ALTER TABLE {table_name} UNSET TBLPROPERTIES ('write.wap.enabled')")
+        spark.sql(
+            f"ALTER TABLE {full_table_name} UNSET TBLPROPERTIES ('write.wap.enabled')"
+        )
 
 
 def main() -> None:
     # Configuration
     # Note: This is for demonstration only, in a real world scenario you would
     # make these parameters of the Glue job and set them there, possibly by using Infrastructure as Code.
-    s3_bucket = "my-iceberg-warehouse"  # replace with your own bucket name
+    s3_bucket_name = "my-iceberg-warehouse-bucket"  # replace with your own bucket name
+    s3_bucket_region = "us-east-1"  # replace with your own region
     catalog_name = "glue_catalog"
     now_string = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     database_name = f"wap_test_{now_string}"
     table_name = "my_iceberg_table"
-    full_table_name = f"{catalog_name}.{database_name}.{table_name}"
+    athena_workgroup = "primary"
 
     # Create Spark session
     glue_context, spark = create_iceberg_glue_session(
-        warehouse_bucket=s3_bucket, catalog_name=catalog_name
+        warehouse_bucket=s3_bucket_name, catalog_name=catalog_name
     )
 
     # Infrastructure setup, read comments in function
     # Note:
     #  In a real world scenario you would setup the infrastructure beforehand,
     #  likely by using Infrastructure as Code.
-    setup_glue_iceberg_table(
-        spark=spark,
+    s3_client = boto3.client("s3")
+    create_bucket(
+        s3_client=s3_client, bucket_name=s3_bucket_name, region=s3_bucket_region
+    )
+    create_database(database_name=database_name, athena_workgroup=athena_workgroup)
+    create_iceberg_table(
         catalog_name=catalog_name,
         database_name=database_name,
         table_name=table_name,
-        s3_bucket=s3_bucket,
+        s3_bucket_name=s3_bucket_name,
+        athena_workgroup=athena_workgroup,
     )
+    s3_client.close()
 
     # ETL: Read data
     # Note:
@@ -229,7 +289,7 @@ def main() -> None:
         spark=spark,
         catalog_name=catalog_name,
         database_name=database_name,
-        table_name=full_table_name,
+        table_name=table_name,
         data_df=transformed_df,
     )
 

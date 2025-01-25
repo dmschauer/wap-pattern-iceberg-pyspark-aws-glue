@@ -1,0 +1,5 @@
+pandas==2.2.3
+jupyter==1.1.1
+jupyterlab==4.3.4
+
+awswrangler==3.9.1
